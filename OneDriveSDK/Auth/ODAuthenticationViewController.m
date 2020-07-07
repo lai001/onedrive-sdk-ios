@@ -6,10 +6,10 @@
 //  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 //  copies of the Software, and to permit persons to whom the Software is
 //  furnished to do so, subject to the following conditions:
-//  
+//
 //  The above copyright notice and this permission notice shall be included in
 //  all copies or substantial portions of the Software.
-//  
+//
 //  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 //  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 //  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -19,6 +19,7 @@
 //  THE SOFTWARE.
 //
 
+#import <WebKit/WebKit.h>
 
 #import "ODAuthenticationViewController.h"
 #import "ODAuthHelper.h"
@@ -26,9 +27,9 @@
 
 #define kRequestTimeoutDefault  60
 
-@interface ODAuthenticationViewController() <UIWebViewDelegate>
+@interface ODAuthenticationViewController() <WKNavigationDelegate>
 
-@property UIWebView *webView;
+@property WKWebView *webView;
 
 @property NSURLRequest *initialRequest;
 @property (strong, nonatomic) ODEndURLCompletion successCompletion;
@@ -87,12 +88,23 @@
     [self.webView loadRequest:self.initialRequest];
 }
 
-- (void)loadView
+- (void)viewDidLoad
 {
-    self.webView = [[UIWebView alloc] init];
-    [self.webView setScalesPageToFit:YES];
+    [super viewDidLoad];
+    NSString *jScript = @"var meta = document.createElement('meta'); meta.setAttribute('name', 'viewport'); meta.setAttribute('content', 'width=device-width'); document.getElementsByTagName('head')[0].appendChild(meta);";
+
+    WKUserScript *wkUScript = [[WKUserScript alloc] initWithSource:jScript injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:YES];
+    WKUserContentController *wkUController = [[WKUserContentController alloc] init];
+    [wkUController addUserScript:wkUScript];
+
+    WKWebViewConfiguration *wkWebConfig = [[WKWebViewConfiguration alloc] init];
+    wkWebConfig.userContentController = wkUController;
+    
+    self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:wkWebConfig];
+    
     self.webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    self.webView.delegate = self;
+
+    self.webView.navigationDelegate = self;
     self.view = self.webView;
     UIBarButtonItem *cancel = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
                                                                                 target:self
@@ -110,38 +122,45 @@
 - (void)viewWillDisappear:(BOOL)animated
 {
     [self.webView stopLoading];
-    self.webView.delegate = nil;
+    self.webView.navigationDelegate = nil;
     [super viewWillDisappear:animated];
 }
 
-#pragma mark - UIWebViewDelegate
+#pragma mark - WKNavigationDelegate Protocol
 
-- (void)webViewDidStartLoad:(UIWebView *)webView
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler
 {
-    [self.timer invalidate];
-    self.timer = [NSTimer scheduledTimerWithTimeInterval:self.requestTimeout target:self selector:@selector(failWithTimeout) userInfo:nil repeats:NO];
-}
-
-- (void)webViewDidFinishLoad:(UIWebView *)webView
-{
-    [self.timer invalidate];
-    self.timer = nil;
-}
-
-- (BOOL)webView:(UIWebView *)webView shouldStartLoadWithRequest:(NSURLRequest *)request navigationType:(UIWebViewNavigationType)navigationType
-{
+    NSURLRequest* request = navigationAction.request;
     if ([[[request.URL absoluteString] lowercaseString] hasPrefix:[[self.endURL absoluteString] lowercaseString]]){
         self.isComplete = YES;
         [self.timer invalidate];
         self.timer = nil;
         
         self.successCompletion(request.URL, nil);
-        return NO;
+        decisionHandler(WKNavigationActionPolicyCancel);
+        return;
     }
-    return YES;
+    decisionHandler(WKNavigationActionPolicyAllow);
 }
 
-- (void)webView:(UIWebView *)webView didFailLoadWithError:(NSError *)error
+- (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation
+{
+    [self.timer invalidate];
+    self.timer = [NSTimer scheduledTimerWithTimeInterval:self.requestTimeout target:self selector:@selector(failWithTimeout) userInfo:nil repeats:NO];
+}
+
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation
+{
+    [self.timer invalidate];
+    self.timer = nil;
+}
+
+- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error
+{
+    [self webView:webView withError:error];
+}
+
+- (void)webView:(WKWebView *)webView withError:(NSError *)error
 {
     [self.timer invalidate];
     self.timer = nil;
@@ -171,9 +190,8 @@
 
 - (void)failWithTimeout
 {
-    [self webView:self.webView didFailLoadWithError:[NSError errorWithDomain:NSURLErrorDomain
-                                                                    code:NSURLErrorTimedOut
-                                                                userInfo:nil]];
+    NSError* error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorTimedOut userInfo:nil];
+    [self webView:_webView withError:error];
 }
 
 @end
